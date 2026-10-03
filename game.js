@@ -62,6 +62,20 @@ const RADII  = [0, 16, 30, 50];   // por tamaño 1, 2, 3
 const SPEEDS = [0, 85, 55, 32];   // velocidad base por tamaño
 const POINTS = [0, 100, 50, 20];  // puntos por tamaño
 
+// Silueta fija de asteroide grande (trazada de la imagen de referencia, en px de imagen).
+// Se centra y normaliza para que el vértice más lejano quede a radio 1.
+const BIG_SHAPE = (() => {
+  const raw = [
+    [188, 63], [267, 87], [251, 171], [330, 195], [307, 282],
+    [238, 279], [205, 335], [107, 288], [62, 206], [83, 119],
+  ];
+  const cx = raw.reduce((s, p) => s + p[0], 0) / raw.length;
+  const cy = raw.reduce((s, p) => s + p[1], 0) / raw.length;
+  const max = Math.max(...raw.map(p => Math.hypot(p[0] - cx, p[1] - cy)));
+  return raw.map(p => [(p[0] - cx) / max, (p[1] - cy) / max]);
+})();
+const BIG_SHAPE_CHANCE = 0.35;  // probabilidad de que un asteroide grande use esta silueta
+
 class Asteroid {
   constructor(x, y, size = 3) {
     this.x    = x;
@@ -77,13 +91,19 @@ class Asteroid {
     this.rotSpeed = rand(-1.2, 1.2);
     this.rot = rand(0, Math.PI * 2);
 
-    // Polígono irregular
-    const n = randInt(8, 13);
     this.verts = [];
-    for (let i = 0; i < n; i++) {
-      const a = (i / n) * Math.PI * 2;
-      const r = this.radius * rand(0.6, 1.0);
-      this.verts.push([Math.cos(a) * r, Math.sin(a) * r]);
+    if (size === 3 && Math.random() < BIG_SHAPE_CHANCE) {
+      // Variante grande con silueta fija
+      for (const [vx, vy] of BIG_SHAPE)
+        this.verts.push([vx * this.radius, vy * this.radius]);
+    } else {
+      // Polígono irregular
+      const n = randInt(8, 13);
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2;
+        const r = this.radius * rand(0.6, 1.0);
+        this.verts.push([Math.cos(a) * r, Math.sin(a) * r]);
+      }
     }
   }
 
