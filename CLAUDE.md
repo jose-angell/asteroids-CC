@@ -22,4 +22,6 @@ All game logic lives in `game.js` (loaded by `index.html` via a plain `<script>`
 - **Input**: `keys[code]` holds held state; `pressed(code)` is a one-shot "just pressed" consumed on read (used for Space to fire/restart). Only arrow keys and Space are handled.
 - **Collisions**: bullet vs asteroid uses `a.radius`; ship vs asteroid uses `ship.radius + a.radius * 0.82` and is skipped while `ship.invincible > 0`.
 
-Note: the README mentions power-ups and a "shooting star" asteroid type, but neither exists in the current code.
+- **Power-up (Disparo Triple)**: `PowerUp` item spawns once per level (`powerUpSpawned`, reset in `nextLevel()`) with probability `POWERUP_CHANCE` when a bullet destroys an asteroid; it is forced on the level's last asteroid, so every level gets at least one. Picking it up sets `ship.tripleShot` (seconds left); `Ship.tryShoot()` then fires 3 bullets in a fan. The effect is lost on death (`Ship.reset()`) but preserved across `nextLevel()`.
+
+Note: the README mentions a "shooting star" asteroid type, which doesn't exist in the current code.
