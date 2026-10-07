@@ -28,6 +28,8 @@ All game logic lives in `game.js` (loaded by `index.html` via a plain `<script>`
 
 - **Power-up (Cámara Lenta)**: third independent item — `slowItem`/`slowSpawned` mirror the shield ones (`type = 'slow'`, `SLOW_CHANCE`, forced on the level's last asteroid). Picking it up sets `ship.slowMo` (6 s). While active, `update()` passes `dt * SLOW_FACTOR` to asteroids only (ship, bullets, particles unaffected) and asteroids are drawn in `SLOW_COLOR`. Lost on death (and asteroids run at normal speed in `'dead'` state), preserved across `nextLevel()`.
 
+- **Power-up (Hiperpropulsión)**: `hyperItem`/`hyperSpawned` mirror the slow ones (`type = 'hyper'`, `HYPER_CHANCE`, forced on the level's last asteroid). Picking it up sets `ship.hyper` (8 s). While active, `Ship.update()` multiplies thrust by `HYPER_THRUST` and rotation by `HYPER_ROT` and clamps speed to `HYPER_MAX_SPEED` (normal terminal speed is ≈330 px/s, there is no explicit cap otherwise); the exhaust flame is longer and green. Lost on death, preserved across `nextLevel()`.
+
 - **Power-up (Bomba Nova)**: fourth item — `novaItem`/`novaSpawned`, `type = 'nova'`, `NOVA_CHANCE` (very rare, only from `NOVA_MIN_LEVEL`, **not** forced on the last asteroid, so most levels have none). Picking it up sets `ship.nova = true` (one stored charge, shown in HUD as `NOVA [↓]`); ArrowDown calls `detonateNova()`, which removes every asteroid without splitting, adds their points, and starts the shockwave visual (`novaFx`). The empty asteroid list triggers `nextLevel()` the same frame. Lost on death, preserved across `nextLevel()`. ArrowDown is therefore also handled as input.
 
 Note: the README mentions a "shooting star" asteroid type, which doesn't exist in the current code.
