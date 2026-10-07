@@ -157,7 +157,13 @@ const SLOW_DURATION = 6;       // s de efecto
 const SLOW_FACTOR   = 0.5;     // multiplicador de velocidad de los asteroides
 const SLOW_CHANCE   = 0.12;    // probabilidad por asteroide destruido (hasta que aparezca)
 const SLOW_COLOR    = '#c8f';
-const ITEM_COLORS   = { triple: POWERUP_COLOR, shield: SHIELD_COLOR, slow: SLOW_COLOR };
+
+// ── Power-up: Bomba Nova ──────────────────────────────────────────────────────
+const NOVA_CHANCE  = 0.004;    // muy escaso: prob. por asteroide destruido (~10-20% por nivel), nunca forzado
+const NOVA_MIN_LEVEL = 3;      // no aparece en los primeros niveles
+const NOVA_COLOR   = '#f84';
+const NOVA_FX_TIME = 0.6;      // s de la onda expansiva visual
+const ITEM_COLORS  = { triple: POWERUP_COLOR, shield: SHIELD_COLOR, slow: SLOW_COLOR, nova: NOVA_COLOR };
 
 class PowerUp {
   constructor(x, y, type = 'triple') {
@@ -207,6 +213,15 @@ class PowerUp {
       ctx.quadraticCurveTo(-6, 7, -6, 1);
       ctx.closePath();
       ctx.stroke();
+    } else if (this.type === 'nova') {
+      // Estallido: rayos radiales
+      for (let i = 0; i < 8; i++) {
+        const a = i * Math.PI / 4;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * 2, Math.sin(a) * 2);
+        ctx.lineTo(Math.cos(a) * 7, Math.sin(a) * 7);
+        ctx.stroke();
+      }
     } else if (this.type === 'slow') {
       // Reloj de arena
       ctx.beginPath();
@@ -246,6 +261,7 @@ class Ship {
     this.tripleShot    = 0;
     this.shield        = 0;
     this.slowMo        = 0;
+    this.nova          = false;
     this.dead          = false;
   }
 
@@ -372,6 +388,8 @@ let ship, bullets, asteroids, particles;
 let powerUp, powerUpSpawned;
 let shieldItem, shieldSpawned;
 let slowItem, slowSpawned;
+let novaItem, novaSpawned;
+let novaFx = 0, novaX = 0, novaY = 0;   // onda expansiva: s restantes y origen
 let score, lives, level;
 let state;      // 'playing' | 'dead' | 'gameover'
 let deadTimer;
@@ -399,6 +417,9 @@ function initGame() {
   shieldSpawned = false;
   slowItem = null;
   slowSpawned = false;
+  novaItem = null;
+  novaSpawned = false;
+  novaFx = 0;
   score  = 0;
   lives  = 3;
   level  = 1;
@@ -413,13 +434,16 @@ function nextLevel() {
   powerUpSpawned = false;          // un power-up garantizado por nivel
   shieldSpawned = false;
   slowSpawned = false;
+  novaSpawned = false;
   const triple = ship.tripleShot;  // los efectos sobreviven al cambio de nivel
   const shield = ship.shield;
   const slowMo = ship.slowMo;
+  const nova   = ship.nova;
   ship.reset();
   ship.tripleShot = triple;
   ship.shield = shield;
   ship.slowMo = slowMo;
+  ship.nova   = nova;
   spawnAsteroids(3 + level);
 }
 
@@ -450,6 +474,25 @@ function destroyAsteroid(a, newAsteroids) {
     slowItem = new PowerUp(a.x - ((powerUp ? 1 : 0) + (shieldItem ? 1 : 0)) * 26, a.y, 'slow');
     slowSpawned = true;
   }
+  // Bomba Nova: escasa, nunca forzada; no aparece si ya hay una en reserva
+  if (level >= NOVA_MIN_LEVEL && !novaSpawned && !novaItem && !ship.nova && Math.random() < NOVA_CHANCE) {
+    novaItem = new PowerUp(a.x, a.y + 26, 'nova');
+    novaSpawned = true;
+  }
+}
+
+// Bomba Nova: desintegra todos los asteroides (sin fragmentos) y suma sus puntos.
+// Con la lista vacía, el chequeo de "Nivel completado" pasa de nivel en el mismo frame.
+function detonateNova() {
+  ship.nova = false;
+  for (const a of asteroids) {
+    score += POINTS[a.size];
+    explode(a.x, a.y, a.size * 5);
+  }
+  asteroids = [];
+  novaFx = NOVA_FX_TIME;
+  novaX = ship.x;
+  novaY = ship.y;
 }
 
 function killShip() {
@@ -484,7 +527,15 @@ function updateSlowItem(dt) {
   if (slowItem.dead) slowItem = null;
 }
 
+function updateNovaItem(dt) {
+  if (!novaItem) return;
+  novaItem.update(dt);
+  if (novaItem.dead) novaItem = null;
+}
+
 function update(dt) {
+  if (novaFx > 0) novaFx -= dt;
+
   if (state === 'gameover') {
     if (pressed('Space')) initGame();
     particles.forEach(p => p.update(dt));
@@ -500,6 +551,7 @@ function update(dt) {
     updatePowerUp(dt);
     updateShieldItem(dt);
     updateSlowItem(dt);
+    updateNovaItem(dt);
     if (deadTimer <= 0) { state = 'playing'; ship.reset(); }
     return;
   }
@@ -508,6 +560,7 @@ function update(dt) {
   if (pressed('Space')) {
     bullets.push(...ship.tryShoot());
   }
+  if (pressed('ArrowDown') && ship.nova) detonateNova();
 
   ship.update(dt);
   bullets.forEach(b => b.update(dt));
@@ -517,6 +570,7 @@ function update(dt) {
   updatePowerUp(dt);
   updateShieldItem(dt);
   updateSlowItem(dt);
+  updateNovaItem(dt);
 
   bullets   = bullets.filter(b => !b.dead);
   particles = particles.filter(p => !p.dead);
@@ -540,6 +594,13 @@ function update(dt) {
     ship.slowMo = SLOW_DURATION;
     explode(slowItem.x, slowItem.y, 6);
     slowItem = null;
+  }
+
+  // Recoger bomba nova
+  if (novaItem && dist(ship, novaItem) < ship.radius + novaItem.radius) {
+    ship.nova = true;
+    explode(novaItem.x, novaItem.y, 6);
+    novaItem = null;
   }
 
   // Bala vs asteroide
@@ -629,7 +690,13 @@ function drawHUD() {
     y += 34;
   }
 
-  for (const [item, label] of [[powerUp, 'POWER-UP'], [shieldItem, 'ESCUDO'], [slowItem, 'LENTO']]) {
+  if (ship.nova) {
+    ctx.fillStyle = NOVA_COLOR;
+    ctx.fillText('NOVA  [↓]', 14, y);
+    y += 20;
+  }
+
+  for (const [item, label] of [[powerUp, 'POWER-UP'], [shieldItem, 'ESCUDO'], [slowItem, 'LENTO'], [novaItem, 'NOVA']]) {
     if (!item) continue;
     ctx.fillStyle = item.color;
     ctx.fillText(`${label}  ${Math.ceil(item.ttl)}s`, 14, y);
@@ -657,8 +724,22 @@ function draw() {
   if (powerUp) powerUp.draw();
   if (shieldItem) shieldItem.draw();
   if (slowItem) slowItem.draw();
+  if (novaItem) novaItem.draw();
   bullets.forEach(b => b.draw());
   ship.draw();
+
+  // Onda expansiva de la Bomba Nova
+  if (novaFx > 0) {
+    const t = 1 - novaFx / NOVA_FX_TIME;
+    ctx.save();
+    ctx.globalAlpha = 1 - t;
+    ctx.strokeStyle = NOVA_COLOR;
+    ctx.lineWidth   = 4;
+    ctx.beginPath();
+    ctx.arc(novaX, novaY, t * Math.hypot(W, H), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
 
   drawHUD();
 
