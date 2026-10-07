@@ -24,4 +24,6 @@ All game logic lives in `game.js` (loaded by `index.html` via a plain `<script>`
 
 - **Power-up (Disparo Triple)**: `PowerUp` item spawns once per level (`powerUpSpawned`, reset in `nextLevel()`) with probability `POWERUP_CHANCE` when a bullet destroys an asteroid; it is forced on the level's last asteroid, so every level gets at least one. Picking it up sets `ship.tripleShot` (seconds left); `Ship.tryShoot()` then fires 3 bullets in a fan. The effect is lost on death (`Ship.reset()`) but preserved across `nextLevel()`.
 
+- **Power-up (Escudo Temporal)**: independent of the triple shot — `shieldItem`/`shieldSpawned` mirror `powerUp`/`powerUpSpawned` (same `PowerUp` class with `type = 'shield'`, `SHIELD_CHANCE`, forced on the level's last asteroid). Picking it up sets `ship.shield` (5 s). While active, the ship–asteroid check uses `SHIELD_RADIUS`; a hit calls `destroyAsteroid()` (points, split, explosion — shared with bullet hits), clears the shield and grants `SHIELD_GRACE` s of `ship.invincible`. Lost on death, preserved across `nextLevel()`.
+
 Note: the README mentions a "shooting star" asteroid type, which doesn't exist in the current code.
