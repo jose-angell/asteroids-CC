@@ -125,7 +125,7 @@ class Asteroid {
     ctx.save();
     ctx.translate(this.x, this.y);
     ctx.rotate(this.rot);
-    ctx.strokeStyle = '#fff';
+    ctx.strokeStyle = ship.slowMo > 0 ? SLOW_COLOR : '#fff';
     ctx.lineWidth   = 1.5;
     ctx.lineJoin    = 'round';
     ctx.beginPath();
@@ -152,12 +152,19 @@ const SHIELD_CHANCE   = 0.12;  // probabilidad por asteroide destruido (hasta qu
 const SHIELD_GRACE    = 1;     // s de invencibilidad tras absorber un golpe
 const SHIELD_COLOR    = '#4af';
 
+// ── Power-up: Cámara Lenta ────────────────────────────────────────────────────
+const SLOW_DURATION = 6;       // s de efecto
+const SLOW_FACTOR   = 0.5;     // multiplicador de velocidad de los asteroides
+const SLOW_CHANCE   = 0.12;    // probabilidad por asteroide destruido (hasta que aparezca)
+const SLOW_COLOR    = '#c8f';
+const ITEM_COLORS   = { triple: POWERUP_COLOR, shield: SHIELD_COLOR, slow: SLOW_COLOR };
+
 class PowerUp {
   constructor(x, y, type = 'triple') {
     this.x = x;
     this.y = y;
     this.type  = type;
-    this.color = type === 'shield' ? SHIELD_COLOR : POWERUP_COLOR;
+    this.color = ITEM_COLORS[type];
     const angle = rand(0, Math.PI * 2);
     this.vx = Math.cos(angle) * 30;
     this.vy = Math.sin(angle) * 30;
@@ -200,6 +207,15 @@ class PowerUp {
       ctx.quadraticCurveTo(-6, 7, -6, 1);
       ctx.closePath();
       ctx.stroke();
+    } else if (this.type === 'slow') {
+      // Reloj de arena
+      ctx.beginPath();
+      ctx.moveTo(-5, -7);
+      ctx.lineTo(5, -7);
+      ctx.lineTo(-5, 7);
+      ctx.lineTo(5, 7);
+      ctx.closePath();
+      ctx.stroke();
     } else {
       // Tres líneas en abanico
       for (const a of [-0.5, 0, 0.5]) {
@@ -229,6 +245,7 @@ class Ship {
     this.shootCooldown = 0;
     this.tripleShot    = 0;
     this.shield        = 0;
+    this.slowMo        = 0;
     this.dead          = false;
   }
 
@@ -237,6 +254,7 @@ class Ship {
     if (this.invincible    > 0) this.invincible    -= dt;
     if (this.tripleShot    > 0) this.tripleShot    -= dt;
     if (this.shield        > 0) this.shield        -= dt;
+    if (this.slowMo        > 0) this.slowMo        -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
 
     const ROT   = 3.5;   // rad/s
@@ -353,6 +371,7 @@ class Particle {
 let ship, bullets, asteroids, particles;
 let powerUp, powerUpSpawned;
 let shieldItem, shieldSpawned;
+let slowItem, slowSpawned;
 let score, lives, level;
 let state;      // 'playing' | 'dead' | 'gameover'
 let deadTimer;
@@ -378,6 +397,8 @@ function initGame() {
   powerUpSpawned = false;
   shieldItem = null;
   shieldSpawned = false;
+  slowItem = null;
+  slowSpawned = false;
   score  = 0;
   lives  = 3;
   level  = 1;
@@ -391,11 +412,14 @@ function nextLevel() {
   particles = [];
   powerUpSpawned = false;          // un power-up garantizado por nivel
   shieldSpawned = false;
+  slowSpawned = false;
   const triple = ship.tripleShot;  // los efectos sobreviven al cambio de nivel
   const shield = ship.shield;
+  const slowMo = ship.slowMo;
   ship.reset();
   ship.tripleShot = triple;
   ship.shield = shield;
+  ship.slowMo = slowMo;
   spawnAsteroids(3 + level);
 }
 
@@ -421,11 +445,17 @@ function destroyAsteroid(a, newAsteroids) {
     shieldItem = new PowerUp(a.x + (powerUp ? 26 : 0), a.y, 'shield');
     shieldSpawned = true;
   }
+  if (!slowSpawned && !slowItem && (last || Math.random() < SLOW_CHANCE)) {
+    // Separar de los otros ítems si salen a la vez
+    slowItem = new PowerUp(a.x - ((powerUp ? 1 : 0) + (shieldItem ? 1 : 0)) * 26, a.y, 'slow');
+    slowSpawned = true;
+  }
 }
 
 function killShip() {
   explode(ship.x, ship.y, 14);
   ship.dead = true;
+  ship.slowMo = 0;
   lives--;
   if (lives <= 0) {
     state = 'gameover';
@@ -448,6 +478,12 @@ function updateShieldItem(dt) {
   if (shieldItem.dead) shieldItem = null;
 }
 
+function updateSlowItem(dt) {
+  if (!slowItem) return;
+  slowItem.update(dt);
+  if (slowItem.dead) slowItem = null;
+}
+
 function update(dt) {
   if (state === 'gameover') {
     if (pressed('Space')) initGame();
@@ -463,6 +499,7 @@ function update(dt) {
     asteroids.forEach(a => a.update(dt));
     updatePowerUp(dt);
     updateShieldItem(dt);
+    updateSlowItem(dt);
     if (deadTimer <= 0) { state = 'playing'; ship.reset(); }
     return;
   }
@@ -474,10 +511,12 @@ function update(dt) {
 
   ship.update(dt);
   bullets.forEach(b => b.update(dt));
-  asteroids.forEach(a => a.update(dt));
+  const adt = ship.slowMo > 0 ? dt * SLOW_FACTOR : dt;  // cámara lenta: solo asteroides
+  asteroids.forEach(a => a.update(adt));
   particles.forEach(p => p.update(dt));
   updatePowerUp(dt);
   updateShieldItem(dt);
+  updateSlowItem(dt);
 
   bullets   = bullets.filter(b => !b.dead);
   particles = particles.filter(p => !p.dead);
@@ -494,6 +533,13 @@ function update(dt) {
     ship.shield = SHIELD_DURATION;
     explode(shieldItem.x, shieldItem.y, 6);
     shieldItem = null;
+  }
+
+  // Recoger cámara lenta
+  if (slowItem && dist(ship, slowItem) < ship.radius + slowItem.radius) {
+    ship.slowMo = SLOW_DURATION;
+    explode(slowItem.x, slowItem.y, 6);
+    slowItem = null;
   }
 
   // Bala vs asteroide
@@ -569,6 +615,7 @@ function drawHUD() {
   const effects = [
     ['TRIPLE', ship.tripleShot, TRIPLE_DURATION, POWERUP_COLOR],
     ['ESCUDO', ship.shield,     SHIELD_DURATION, SHIELD_COLOR],
+    ['LENTO',  ship.slowMo,     SLOW_DURATION,   SLOW_COLOR],
   ];
   for (const [name, left, total, color] of effects) {
     if (left <= 0) continue;
@@ -582,7 +629,7 @@ function drawHUD() {
     y += 34;
   }
 
-  for (const [item, label] of [[powerUp, 'POWER-UP'], [shieldItem, 'ESCUDO']]) {
+  for (const [item, label] of [[powerUp, 'POWER-UP'], [shieldItem, 'ESCUDO'], [slowItem, 'LENTO']]) {
     if (!item) continue;
     ctx.fillStyle = item.color;
     ctx.fillText(`${label}  ${Math.ceil(item.ttl)}s`, 14, y);
@@ -609,6 +656,7 @@ function draw() {
   asteroids.forEach(a => a.draw());
   if (powerUp) powerUp.draw();
   if (shieldItem) shieldItem.draw();
+  if (slowItem) slowItem.draw();
   bullets.forEach(b => b.draw());
   ship.draw();
 
