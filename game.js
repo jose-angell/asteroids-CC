@@ -200,6 +200,86 @@ class Meteor {
   }
 }
 
+// ── Agujero negro ─────────────────────────────────────────────────────────────
+// Solo afecta a la nave: asteroides, meteoritos, balas e ítems lo ignoran.
+class BlackHole {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.warn = BH_WARN;   // s de aviso restantes
+    this.time = 0;         // s activo
+    this.rot  = 0;
+    this.dead = false;
+  }
+
+  get active() { return this.warn <= 0; }
+
+  // 0 → 1 al aparecer, 1 → 0 al final
+  get scale() {
+    if (!this.active) return 0;
+    return Math.max(0, Math.min(1, this.time / BH_FADE, (BH_DURATION - this.time) / BH_FADE));
+  }
+
+  update(dt) {
+    if (!this.active) { this.warn -= dt; return; }
+    this.time += dt;
+    this.rot  += 2.5 * dt;
+    if (this.time >= BH_DURATION) this.dead = true;
+  }
+
+  draw() {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.strokeStyle = BH_COLOR;
+    if (!this.active) {
+      // Aviso: círculo discontinuo parpadeante
+      if (Math.floor(this.warn * 6) % 2 === 1) {
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 6]);
+        ctx.beginPath();
+        ctx.arc(0, 0, BH_CORE * 3, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+      return;
+    }
+    const s = this.scale;
+    ctx.lineWidth = 1.5;
+    ctx.lineCap = 'round';
+    // Tres brazos en espiral que giran y se desvanecen hacia afuera
+    const ARMS = 3, STEPS = 28, TURNS = 1.4;
+    for (let arm = 0; arm < ARMS; arm++) {
+      const base = this.rot + arm * (Math.PI * 2 / ARMS);
+      for (let i = 0; i < STEPS; i++) {
+        const t0 = i / STEPS, t1 = (i + 1) / STEPS;
+        const seg = t => {
+          const th = base + t * TURNS * Math.PI * 2;
+          const r  = (BH_CORE + t * (BH_RANGE * 0.6 - BH_CORE)) * s;
+          return [Math.cos(th) * r, Math.sin(th) * r];
+        };
+        const [x0, y0] = seg(t0), [x1, y1] = seg(t1);
+        ctx.globalAlpha = (1 - t0) * 0.9;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+      }
+    }
+    // Anillo tenue y núcleo negro
+    ctx.globalAlpha = 0.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, BH_CORE * s * 1.6, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.arc(0, 0, BH_CORE * s, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
 // ── Power-up: Disparo Triple ──────────────────────────────────────────────────
 const TRIPLE_DURATION = 10;    // s de efecto
 const TRIPLE_SPREAD   = 0.22;  // rad entre balas del abanico
@@ -244,6 +324,21 @@ const METEOR_SPEED     = 210;  // px/s comunes a toda la oleada
 const METEOR_SPREAD    = 0.06; // rad de desviación por meteorito
 const METEOR_POINTS    = 30;
 const SHOWER_COLOR     = '#fa4';
+
+// ── Agujero negro ─────────────────────────────────────────────────────────────
+const BH_MIN_DELAY = 45;    // s mínimos entre intentos
+const BH_MAX_DELAY = 75;    // s máximos entre intentos
+const BH_CHANCE    = 0.5;   // probabilidad de que un intento produzca agujero (evento raro)
+const BH_MIN_LEVEL = 2;     // no aparece en el primer nivel
+const BH_WARN      = 1.5;   // s de aviso marcando la posición
+const BH_DURATION  = 8;     // s activo (incluye crecer y encogerse)
+const BH_FADE      = 1;     // s de crecimiento y de encogimiento
+const BH_RANGE     = 230;   // px de radio de influencia
+const BH_PULL      = 420;   // px/s² en el centro, cae linealmente a 0 en BH_RANGE (empuje normal = 260)
+const BH_CORE      = 14;    // px de radio letal del núcleo
+const BH_SAFE_DIST = 200;   // px mínimos a la nave y al centro al aparecer
+const BH_EJECT     = 350;   // px/s de expulsión cuando el escudo absorbe el núcleo
+const BH_COLOR     = '#96f';
 
 const ITEM_COLORS  = { triple: POWERUP_COLOR, shield: SHIELD_COLOR, slow: SLOW_COLOR, nova: NOVA_COLOR, hyper: HYPER_COLOR };
 
@@ -494,8 +589,9 @@ let hyperItem, hyperSpawned;
 let novaItem, novaSpawned;
 let novaFx = 0, novaX = 0, novaY = 0;   // onda expansiva: s restantes y origen
 let meteors, showerTimer, showerWarn;   // lluvia: meteoritos, s hasta la próxima, s de aviso restantes
+let blackHole, bhTimer;                 // agujero negro activo (o null) y s hasta el próximo intento
 let score, lives, level;
-let state;      // 'playing' | 'dead' | 'gameover'
+let state;     // 'playing' | 'dead' | 'gameover'
 let deadTimer;
 
 const nextShowerDelay = () => rand(SHOWER_MIN_DELAY, SHOWER_MAX_DELAY);
@@ -513,6 +609,29 @@ function spawnShower() {
     const y = H / 2 - dy * (R + back) + dx * side;
     meteors.push(new Meteor(x, y, theta + rand(-METEOR_SPREAD, METEOR_SPREAD), METEOR_SPEED + rand(-15, 15)));
   }
+}
+
+const nextBlackHoleDelay = () => rand(BH_MIN_DELAY, BH_MAX_DELAY);
+
+// Aparece lejos de la nave y del punto de reaparición (centro)
+function spawnBlackHole() {
+  let x, y;
+  do {
+    x = rand(80, W - 80);
+    y = rand(80, H - 80);
+  } while (Math.hypot(x - ship.x, y - ship.y) < BH_SAFE_DIST ||
+           Math.hypot(x - W / 2, y - H / 2) < BH_SAFE_DIST);
+  blackHole = new BlackHole(x, y);
+}
+
+// Atracción lineal (máxima en el centro, 0 en BH_RANGE). Solo mueve la nave.
+function applyBlackHolePull(dt) {
+  if (!blackHole || !blackHole.active) return;
+  const d = dist(ship, blackHole);
+  if (d >= BH_RANGE || d === 0) return;
+  const acc = BH_PULL * blackHole.scale * (1 - d / BH_RANGE);
+  ship.vx += (blackHole.x - ship.x) / d * acc * dt;
+  ship.vy += (blackHole.y - ship.y) / d * acc * dt;
 }
 
 function destroyMeteor(m) {
@@ -552,6 +671,8 @@ function initGame() {
   meteors = [];
   showerTimer = nextShowerDelay();
   showerWarn = 0;
+  blackHole = null;
+  bhTimer = nextBlackHoleDelay();
   score  = 0;
   lives  = 3;
   level  = 1;
@@ -571,6 +692,8 @@ function nextLevel() {
   meteors = [];
   showerTimer = nextShowerDelay();
   showerWarn = 0;
+  blackHole = null;
+  bhTimer = nextBlackHoleDelay();
   const triple = ship.tripleShot;  // los efectos sobreviven al cambio de nivel
   const shield = ship.shield;
   const slowMo = ship.slowMo;
@@ -700,6 +823,10 @@ function update(dt) {
     asteroids.forEach(a => a.update(dt));
     meteors.forEach(m => m.update(dt));
     meteors = meteors.filter(m => !m.dead);
+    if (blackHole) {
+      blackHole.update(dt);
+      if (blackHole.dead) blackHole = null;
+    }
     updatePowerUp(dt);
     updateShieldItem(dt);
     updateSlowItem(dt);
@@ -715,6 +842,7 @@ function update(dt) {
   }
   if (pressed('ArrowDown') && ship.nova) detonateNova();
 
+  applyBlackHolePull(dt);   // antes de ship.update para respetar drag y tope de hiper
   ship.update(dt);
   bullets.forEach(b => b.update(dt));
   const adt = ship.slowMo > 0 ? dt * SLOW_FACTOR : dt;  // cámara lenta: solo asteroides
@@ -729,6 +857,18 @@ function update(dt) {
   } else {
     showerTimer -= dt;
     if (showerTimer <= 0) showerWarn = SHOWER_WARN;
+  }
+
+  // Agujero negro: evento raro, uno a la vez, desde BH_MIN_LEVEL
+  if (blackHole) {
+    blackHole.update(dt);
+    if (blackHole.dead) blackHole = null;
+  } else if (level >= BH_MIN_LEVEL) {
+    bhTimer -= dt;
+    if (bhTimer <= 0) {
+      if (Math.random() < BH_CHANCE) spawnBlackHole();
+      bhTimer = nextBlackHoleDelay();
+    }
   }
   updatePowerUp(dt);
   updateShieldItem(dt);
@@ -831,6 +971,21 @@ function update(dt) {
       }
     }
     if (extra.length || shielded) asteroids = asteroids.filter(a => !a.dead).concat(extra);
+
+    // Núcleo del agujero negro: letal; el escudo se consume y expulsa la nave
+    if (state === 'playing' && ship.invincible <= 0 && blackHole && blackHole.active &&
+        dist(ship, blackHole) < BH_CORE * blackHole.scale + ship.radius) {
+      if (ship.shield > 0) {
+        const d = dist(ship, blackHole) || 1;
+        ship.vx = (ship.x - blackHole.x) / d * BH_EJECT;
+        ship.vy = (ship.y - blackHole.y) / d * BH_EJECT;
+        ship.shield = 0;
+        ship.invincible = SHIELD_GRACE;
+        explode(ship.x, ship.y, 8);
+      } else {
+        killShip();
+      }
+    }
   }
   meteors = meteors.filter(m => !m.dead);
 
@@ -919,6 +1074,7 @@ function draw() {
   ctx.fillRect(0, 0, W, H);
 
   particles.forEach(p => p.draw());
+  if (blackHole) blackHole.draw();
   asteroids.forEach(a => a.draw());
   meteors.forEach(m => m.draw());
   if (powerUp) powerUp.draw();
@@ -952,6 +1108,16 @@ function draw() {
     ctx.textAlign = 'center';
     ctx.font = 'bold 28px monospace';
     ctx.fillText('¡LLUVIA DE METEORITOS!', W / 2, H / 2 - 110);
+    ctx.restore();
+  }
+
+  // Aviso de agujero negro (el círculo discontinuo marca dónde aparecerá)
+  if (blackHole && !blackHole.active && state === 'playing' && Math.floor(blackHole.warn * 8) % 2 === 1) {
+    ctx.save();
+    ctx.fillStyle = BH_COLOR;
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 28px monospace';
+    ctx.fillText('¡AGUJERO NEGRO!', W / 2, H / 2 + 110);
     ctx.restore();
   }
 
