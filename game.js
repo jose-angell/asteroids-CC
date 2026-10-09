@@ -138,6 +138,68 @@ class Asteroid {
   }
 }
 
+// ── Meteor (lluvia de meteoritos) ─────────────────────────────────────────────
+class Meteor {
+  constructor(x, y, angle, speed) {
+    this.x = x;
+    this.y = y;
+    this.vx = Math.cos(angle) * speed;
+    this.vy = Math.sin(angle) * speed;
+    this.radius = rand(7, 12);
+    this.rotSpeed = rand(-2, 2);
+    this.rot = rand(0, Math.PI * 2);
+    this.entered = false;   // ya estuvo dentro del canvas
+    this.ttl = 8;           // seguridad: nunca queda uno vivo para siempre
+    this.dead = false;
+
+    this.verts = [];
+    const n = randInt(6, 8);
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      const r = this.radius * rand(0.65, 1.0);
+      this.verts.push([Math.cos(a) * r, Math.sin(a) * r]);
+    }
+  }
+
+  update(dt) {
+    // Sin wrap: cruza la pantalla una sola vez
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    this.rot += this.rotSpeed * dt;
+    this.ttl -= dt;
+    const m = this.radius + 20;
+    const inside = this.x > -m && this.x < W + m && this.y > -m && this.y < H + m;
+    if (inside) this.entered = true;
+    else if (this.entered) this.dead = true;
+    if (this.ttl <= 0) this.dead = true;
+  }
+
+  draw() {
+    const color = ship.slowMo > 0 ? SLOW_COLOR : SHOWER_COLOR;
+    ctx.save();
+    // Estela corta opuesta al movimiento
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.4;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(this.x - this.vx * 0.08, this.y - this.vy * 0.08);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rot);
+    ctx.lineWidth = 1.5;
+    ctx.lineJoin  = 'round';
+    ctx.beginPath();
+    ctx.moveTo(this.verts[0][0], this.verts[0][1]);
+    for (let i = 1; i < this.verts.length; i++)
+      ctx.lineTo(this.verts[i][0], this.verts[i][1]);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
 // ── Power-up: Disparo Triple ──────────────────────────────────────────────────
 const TRIPLE_DURATION = 10;    // s de efecto
 const TRIPLE_SPREAD   = 0.22;  // rad entre balas del abanico
@@ -171,6 +233,17 @@ const HYPER_ROT       = 1.4;   // multiplicador de giro
 const HYPER_MAX_SPEED = 560;   // px/s, tope durante el efecto (normal ≈ 330)
 const HYPER_CHANCE    = 0.12;  // probabilidad por asteroide destruido (hasta que aparezca)
 const HYPER_COLOR     = '#8f4';
+
+// ── Lluvia de meteoritos ──────────────────────────────────────────────────────
+const SHOWER_MIN_DELAY = 20;   // s mínimos entre lluvias
+const SHOWER_MAX_DELAY = 35;   // s máximos entre lluvias
+const SHOWER_WARN      = 1;    // s de aviso (sin indicar dirección)
+const SHOWER_BASE      = 6;    // meteoritos = min(SHOWER_BASE + nivel, SHOWER_MAX)
+const SHOWER_MAX       = 14;
+const METEOR_SPEED     = 210;  // px/s comunes a toda la oleada
+const METEOR_SPREAD    = 0.06; // rad de desviación por meteorito
+const METEOR_POINTS    = 30;
+const SHOWER_COLOR     = '#fa4';
 
 const ITEM_COLORS  = { triple: POWERUP_COLOR, shield: SHIELD_COLOR, slow: SLOW_COLOR, nova: NOVA_COLOR, hyper: HYPER_COLOR };
 
@@ -420,9 +493,33 @@ let slowItem, slowSpawned;
 let hyperItem, hyperSpawned;
 let novaItem, novaSpawned;
 let novaFx = 0, novaX = 0, novaY = 0;   // onda expansiva: s restantes y origen
+let meteors, showerTimer, showerWarn;   // lluvia: meteoritos, s hasta la próxima, s de aviso restantes
 let score, lives, level;
 let state;      // 'playing' | 'dead' | 'gameover'
 let deadTimer;
+
+const nextShowerDelay = () => rand(SHOWER_MIN_DELAY, SHOWER_MAX_DELAY);
+
+// Oleada: todos con la misma dirección (± un pequeño desvío), entrando escalonados desde fuera del canvas.
+function spawnShower() {
+  const theta = rand(0, Math.PI * 2);
+  const dx = Math.cos(theta), dy = Math.sin(theta);
+  const R = Math.hypot(W, H) / 2 + 40;
+  const count = Math.min(SHOWER_BASE + level, SHOWER_MAX);
+  for (let i = 0; i < count; i++) {
+    const side = rand(-R, R);    // posición a lo largo de la perpendicular
+    const back = rand(0, 250);   // escalonado hacia atrás
+    const x = W / 2 - dx * (R + back) - dy * side;
+    const y = H / 2 - dy * (R + back) + dx * side;
+    meteors.push(new Meteor(x, y, theta + rand(-METEOR_SPREAD, METEOR_SPREAD), METEOR_SPEED + rand(-15, 15)));
+  }
+}
+
+function destroyMeteor(m) {
+  m.dead = true;
+  score += METEOR_POINTS;
+  explode(m.x, m.y, 6);
+}
 
 function spawnAsteroids(count) {
   const SAFE_DIST = 130;
@@ -452,6 +549,9 @@ function initGame() {
   novaItem = null;
   novaSpawned = false;
   novaFx = 0;
+  meteors = [];
+  showerTimer = nextShowerDelay();
+  showerWarn = 0;
   score  = 0;
   lives  = 3;
   level  = 1;
@@ -468,6 +568,9 @@ function nextLevel() {
   slowSpawned = false;
   hyperSpawned = false;
   novaSpawned = false;
+  meteors = [];
+  showerTimer = nextShowerDelay();
+  showerWarn = 0;
   const triple = ship.tripleShot;  // los efectos sobreviven al cambio de nivel
   const shield = ship.shield;
   const slowMo = ship.slowMo;
@@ -529,6 +632,8 @@ function detonateNova() {
     explode(a.x, a.y, a.size * 5);
   }
   asteroids = [];
+  for (const m of meteors) destroyMeteor(m);
+  meteors = [];
   novaFx = NOVA_FX_TIME;
   novaX = ship.x;
   novaY = ship.y;
@@ -593,6 +698,8 @@ function update(dt) {
     particles.forEach(p => p.update(dt));
     particles = particles.filter(p => !p.dead);
     asteroids.forEach(a => a.update(dt));
+    meteors.forEach(m => m.update(dt));
+    meteors = meteors.filter(m => !m.dead);
     updatePowerUp(dt);
     updateShieldItem(dt);
     updateSlowItem(dt);
@@ -612,7 +719,17 @@ function update(dt) {
   bullets.forEach(b => b.update(dt));
   const adt = ship.slowMo > 0 ? dt * SLOW_FACTOR : dt;  // cámara lenta: solo asteroides
   asteroids.forEach(a => a.update(adt));
+  meteors.forEach(m => m.update(adt));
   particles.forEach(p => p.update(dt));
+
+  // Lluvia de meteoritos: aviso de SHOWER_WARN s y luego la oleada
+  if (showerWarn > 0) {
+    showerWarn -= dt;
+    if (showerWarn <= 0) { spawnShower(); showerTimer = nextShowerDelay(); }
+  } else {
+    showerTimer -= dt;
+    if (showerTimer <= 0) showerWarn = SHOWER_WARN;
+  }
   updatePowerUp(dt);
   updateShieldItem(dt);
   updateSlowItem(dt);
@@ -668,15 +785,27 @@ function update(dt) {
     }
   }
   asteroids = asteroids.filter(a => !a.dead).concat(newAsteroids);
-  bullets   = bullets.filter(b => !b.dead);
 
-  // Nave vs asteroide
+  // Bala vs meteorito
+  for (const b of bullets) {
+    for (const m of meteors) {
+      if (!m.dead && !b.dead && dist(b, m) < m.radius) {
+        b.dead = true;
+        destroyMeteor(m);
+      }
+    }
+  }
+  bullets = bullets.filter(b => !b.dead);
+
+  // Nave vs asteroide / meteorito
   if (ship.invincible <= 0) {
     const shielded = ship.shield > 0;
     const r = shielded ? SHIELD_RADIUS : ship.radius;
     const extra = [];
+    let hit = false;
     for (const a of asteroids) {
       if (dist(ship, a) < r + a.radius * 0.82) {
+        hit = true;
         if (shielded) {
           destroyAsteroid(a, extra);
           ship.shield = 0;
@@ -687,8 +816,23 @@ function update(dt) {
         break;
       }
     }
+    if (!hit) {
+      for (const m of meteors) {
+        if (dist(ship, m) < r + m.radius * 0.82) {
+          if (shielded) {
+            destroyMeteor(m);
+            ship.shield = 0;
+            ship.invincible = SHIELD_GRACE;
+          } else {
+            killShip();
+          }
+          break;
+        }
+      }
+    }
     if (extra.length || shielded) asteroids = asteroids.filter(a => !a.dead).concat(extra);
   }
+  meteors = meteors.filter(m => !m.dead);
 
   // Nivel completado
   if (asteroids.length === 0) nextLevel();
@@ -776,6 +920,7 @@ function draw() {
 
   particles.forEach(p => p.draw());
   asteroids.forEach(a => a.draw());
+  meteors.forEach(m => m.draw());
   if (powerUp) powerUp.draw();
   if (shieldItem) shieldItem.draw();
   if (slowItem) slowItem.draw();
@@ -794,6 +939,19 @@ function draw() {
     ctx.beginPath();
     ctx.arc(novaX, novaY, t * Math.hypot(W, H), 0, Math.PI * 2);
     ctx.stroke();
+    ctx.restore();
+  }
+
+  // Aviso de lluvia: simétrico (texto + marco en los 4 bordes) para no revelar la dirección
+  if (showerWarn > 0 && state === 'playing' && Math.floor(showerWarn * 8) % 2 === 1) {
+    ctx.save();
+    ctx.strokeStyle = SHOWER_COLOR;
+    ctx.fillStyle   = SHOWER_COLOR;
+    ctx.lineWidth   = 4;
+    ctx.strokeRect(2, 2, W - 4, H - 4);
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 28px monospace';
+    ctx.fillText('¡LLUVIA DE METEORITOS!', W / 2, H / 2 - 110);
     ctx.restore();
   }
 
